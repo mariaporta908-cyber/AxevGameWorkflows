@@ -1,0 +1,336 @@
+name: Aula animada - Gasometria arterial (teste otimizado)
+
+on:
+  workflow_dispatch:
+    inputs:
+      voice:
+        description: "Voz neural em português"
+        required: true
+        type: choice
+        options:
+          - pt-PT-RaquelNeural
+          - pt-BR-FranciscaNeural
+        default: pt-PT-RaquelNeural
+      quality:
+        description: "Qualidade/compressão do vídeo final"
+        required: true
+        type: choice
+        options:
+          - leve
+          - equilibrada
+          - alta
+        default: equilibrada
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aula-gasometria-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  render-aula:
+    name: Criar aula de gasometria em português
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Preparar ambiente
+        uses: actions/checkout@v4
+
+      - name: Instalar Node e Python
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar ferramentas
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+
+      - name: Criar narração neural em português
+        id: narration
+        shell: bash
+        env:
+          VOICE: ${{ inputs.voice }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/gasometria/audio" "$RUNNER_TEMP/gasometria/raw" "$RUNNER_TEMP/gasometria/final"
+
+          cat > "$RUNNER_TEMP/gasometria/narracao.txt" <<'TEXT'
+          Olá! Nesta aula vamos compreender a gasometria arterial, um exame que ajuda a avaliar três aspetos fundamentais: o equilíbrio ácido-base, a ventilação e a oxigenação do sangue.
+
+          Imagine que o sangue é uma equipa de transporte. O oxigénio precisa de chegar aos tecidos, enquanto o dióxido de carbono, ou C O dois, precisa de ser eliminado pelos pulmões. Ao mesmo tempo, o organismo tem de manter o pH dentro de limites adequados. A gasometria oferece uma fotografia deste equilíbrio num determinado momento.
+
+          O exame mede diretamente o pH, a pressão parcial de oxigénio, chamada P A O dois, e a pressão parcial de dióxido de carbono, chamada P A C O dois. A partir destes valores, calcula o bicarbonato, ou H C O três, e o excesso de base. A saturação arterial de oxigénio também ajuda a avaliar a percentagem de hemoglobina que transporta oxigénio.
+
+          Vamos aos valores de referência gerais ao nível do mar. O pH costuma ficar entre sete vírgula trinta e cinco e sete vírgula quarenta e cinco. A P A C O dois, entre trinta e cinco e quarenta e cinco milímetros de mercúrio. A P A O dois, entre setenta e cinco e cem milímetros de mercúrio. O bicarbonato, entre vinte e dois e vinte e seis miliequivalentes por litro. E a saturação, entre noventa e cinco e cem por cento. Os intervalos podem variar ligeiramente entre laboratórios.
+
+          Como interpretar? Primeiro olhamos para o pH. Abaixo de sete vírgula trinta e cinco existe acidemia; acima de sete vírgula quarenta e cinco, alcalemia. Depois observamos o dióxido de carbono e o bicarbonato para perceber se a alteração é principalmente respiratória ou metabólica.
+
+          Na acidose respiratória, o pH está baixo e o dióxido de carbono está alto. Isto pode acontecer quando os pulmões não eliminam CO dois suficiente, por exemplo numa exacerbação de D P O C, numa asma grave, numa depressão respiratória por opioides, numa fraqueza muscular ou numa obstrução das vias aéreas.
+
+          Na alcalose respiratória, o pH está alto e o dióxido de carbono está baixo. É comum quando a pessoa hiperventila, por exemplo por ansiedade, dor, febre ou falta de oxigénio.
+
+          Na acidose metabólica, o pH e o bicarbonato estão baixos. Entre as causas possíveis estão cetoacidose diabética, acidose lática associada a choque ou sépsis, insuficiência renal, diarreia grave e algumas intoxicações.
+
+          Na alcalose metabólica, o pH e o bicarbonato estão altos. Pode estar relacionada com vómitos prolongados, diuréticos ou excesso de bicarbonato.
+
+          Como é feita a colheita? Geralmente utiliza-se a artéria radial, no punho. A amostra é recolhida numa seringa própria, pré-heparinizada, para evitar a coagulação, e enviada rapidamente ao gasómetro. A artéria femoral ou braquial podem ser alternativas. Depois da punção, é importante comprimir o local durante pelo menos cinco minutos, ou mais quando necessário, para reduzir o risco de hematoma. Evitam-se locais com infeção ou má circulação.
+
+          Vamos testar o que aprendemos. Se o pH está baixo e o dióxido de carbono está alto, pense em acidose respiratória. Se o pH está alto e o dióxido de carbono está baixo, pense em alcalose respiratória. Se o pH e o bicarbonato estão baixos, pense em acidose metabólica. E se ambos estão altos, pense em alcalose metabólica.
+
+          Para terminar, lembre-se: a gasometria não serve apenas para verificar o oxigénio. Ela ajuda a compreender a ventilação e o equilíbrio metabólico, sendo especialmente importante em situações como insuficiência respiratória, choque e sépsis. A interpretação deve considerar sempre o estado clínico do paciente e os restantes exames. Obrigado por acompanhar esta aula!
+          TEXT
+
+          # Sem fallback robótico: se o TTS neural falhar, o job falha com a mensagem original.
+          python -m edge_tts \
+            --voice "$VOICE" \
+            --rate=-4% \
+            --text "$(cat "$RUNNER_TEMP/gasometria/narracao.txt")" \
+            --write-media "$RUNNER_TEMP/gasometria/audio/narracao.mp3"
+
+          test -s "$RUNNER_TEMP/gasometria/audio/narracao.mp3"
+
+          AUDIO_SECONDS=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RUNNER_TEMP/gasometria/audio/narracao.mp3")
+          echo "audio_seconds=$AUDIO_SECONDS" >> "$GITHUB_OUTPUT"
+
+          python - "$AUDIO_SECONDS" <<'PY'
+          import sys
+          seconds = float(sys.argv[1])
+          if seconds < 120:
+              raise SystemExit(f"Narração com apenas {seconds:.1f}s; a aula precisa de pelo menos 120s.")
+          print(f"Duração da narração neural: {seconds:.1f} segundos")
+          PY
+
+      - name: Clonar o 2D Animation Studio e criar a cena
+        shell: bash
+        env:
+          AUDIO_SECONDS: ${{ steps.narration.outputs.audio_seconds }}
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/hanisaf/2d-animation-studio.git 2d-animation-studio
+          cd 2d-animation-studio
+          npm ci
+
+          scripts/new.sh series gasometria "Aula de Gasometria"
+          scripts/new.sh scene gasometria aula_gasometria
+
+          cat > scenes/gasometria/aula_gasometria/asset.js <<'JS'
+          asset({
+            title: 'Gasometria arterial: compreender os fundamentos',
+            logline: 'Aula visual em português sobre parâmetros, distúrbios e colheita da gasometria arterial.',
+            files: ['scene.js'],
+            docs: 'README.md',
+            cast: [],
+            locations: [],
+          });
+          JS
+
+          cat > scenes/gasometria/aula_gasometria/README.md <<'MD'
+          # Gasometria arterial — aula explicativa
+          Aula visual com parâmetros de referência, quatro distúrbios ácido-base, colheita e revisão final.
+          A narração neural em português é adicionada na etapa final do workflow.
+          MD
+
+          # Os tempos das cenas são distribuídos proporcionalmente pela duração real
+          # da narração, evitando que a última cena fique parada durante muito tempo.
+          DURATION=$(python -c 'import math,os; print(math.ceil(float(os.environ["AUDIO_SECONDS"])+2))')
+          export DURATION
+
+          cat > scenes/gasometria/aula_gasometria/scene.js <<'JS'
+          (() => {
+            const W = 1920, H = 1080;
+            const bg = (c) => shape([[0,0],[W,0],[W,H],[0,H]], {fill:c, stroke:null, closed:true});
+            const panel = (x,y,w,h,c='#ffffff') => shape([[x,y],[x+w,y],[x+w,y+h],[x,y+h]], {fill:c, stroke:'#243047', lwPx:5, closed:true});
+            const label = (txt,x,y,age=5) => callout(txt,x,y,age,{dx:0,dy:-115,size:30,cps:24,hold:8,speaker:'Professor'});
+            const doctor = (x=1480,y=790,scale=1) => {
+              ellipse(x,y-300,92*scale,112*scale,{fill:'#8d5524',stroke:'#263247',lwPx:8});
+              ellipse(x,y-315,70*scale,80*scale,{fill:'#d99a70',stroke:'#263247',lwPx:5});
+              ellipse(x-25*scale,y-325,8*scale,10*scale,{fill:'#18212f'});
+              ellipse(x+25*scale,y-325,8*scale,10*scale,{fill:'#18212f'});
+              line([[x-30*scale,y-270*scale],[x+30*scale,y-270*scale]],{stroke:'#7a2934',lwPx:6});
+              shape([[x-100*scale,y-185*scale],[x+100*scale,y-185*scale],[x+150*scale,y+120*scale],[x-150*scale,y+120*scale]],{fill:'#f7f9fc',stroke:'#263247',lwPx:8,closed:true});
+              shape([[x-35*scale,y-180*scale],[x+35*scale,y-180*scale],[x+18*scale,y+30*scale],[x-18*scale,y+30*scale]],{fill:'#2876a8',stroke:'#263247',lwPx:4,closed:true});
+              line([[x-105*scale,y-125*scale],[x-210*scale,y+20*scale]],{stroke:'#d99a70',lwPx:30});
+              line([[x+105*scale,y-125*scale],[x+205*scale,y-20*scale]],{stroke:'#d99a70',lwPx:30});
+            };
+            const titleCard = (title,sub) => {
+              bg('#10243a');
+              ellipse(300,260,120,120,{fill:'#e63946',stroke:'#ffffff',lwPx:8});
+              ellipse(300,260,72,72,{fill:'#ffffff',stroke:'#ffffff',lwPx:3});
+              panel(500,180,1120,390,'#f3f7fb');
+              label(title,1050,360,4);
+              label(sub,1050,520,4);
+              doctor(1540,850,0.8);
+            };
+            function opening(t,lt,dur){ titleCard('GASOMETRIA ARTERIAL','O que o sangue nos revela?'); label('Equilíbrio ácido-base • Ventilação • Oxigenação',850,760,lt); }
+            function purpose(t,lt,dur){
+              bg('#e8f3f8'); panel(120,110,1680,760);
+              ellipse(470,450,170,170,{fill:'#e63946',stroke:'#7b1e2b',lwPx:8});
+              label('O₂ chega aos tecidos',470,420,lt);
+              ellipse(1110,450,170,170,{fill:'#6c8798',stroke:'#263247',lwPx:8});
+              label('CO₂ é eliminado',1110,420,lt);
+              doctor(1570,850,0.68);
+              label('Uma fotografia do estado respiratório e metabólico',900,820,lt);
+            }
+            function parameters(t,lt,dur){
+              bg('#f5f7fb');
+              const rows=[['pH','7,35 a 7,45','#6c4ab6'],['PaCO₂','35 a 45 mmHg','#2676b8'],['PaO₂','75 a 100 mmHg','#d94b55'],['HCO₃','22 a 26 mEq/L','#27875b'],['SaO₂','95% a 100%','#d18a24']];
+              rows.forEach((r,i)=>{const y=130+i*170;panel(180,y,1450,125,'#ffffff');ellipse(280,y+62,38,38,{fill:r[2],stroke:'#263247',lwPx:3});label(r[0]+'  |  '+r[1],900,y+78,lt);});
+              label('Valores gerais ao nível do mar; podem variar por laboratório',950,1010,lt);
+            }
+            function acidBase(t,lt,dur){
+              bg('#eef4f8');
+              panel(100,100,820,800,'#fff0ef'); panel(1000,100,820,800,'#eef5ff');
+              label('ACIDEMIA: pH abaixo de 7,35',510,210,lt);
+              label('ALCALEMIA: pH acima de 7,45',1410,210,lt);
+              ellipse(500,500,160,160,{fill:'#d94848',stroke:'#7b1e2b',lwPx:8});
+              ellipse(1410,500,160,160,{fill:'#397fc2',stroke:'#164a7a',lwPx:8});
+              label('Primeiro: olhar para o pH',960,840,lt);
+            }
+            function respiratory(t,lt,dur){
+              bg('#edf7f2'); panel(100,100,820,800,'#fff0ef'); panel(1000,100,820,800,'#eef5ff');
+              label('ACIDOSE RESPIRATÓRIA',510,220,lt); label('pH baixo + PaCO₂ alto',510,370,lt);
+              label('ALCALOSE RESPIRATÓRIA',1410,220,lt); label('pH alto + PaCO₂ baixo',1410,370,lt);
+              ellipse(500,600,120,120,{fill:'#e76f51',stroke:'#6d2d20',lwPx:6});
+              ellipse(1410,600,120,120,{fill:'#4ea8de',stroke:'#164a7a',lwPx:6});
+              label('Hipoventilação: retém CO₂',510,810,lt); label('Hiperventilação: elimina CO₂',1410,810,lt);
+            }
+            function metabolic(t,lt,dur){
+              bg('#f7f3ea'); panel(100,100,820,800,'#fff0ef'); panel(1000,100,820,800,'#eff8ed');
+              label('ACIDOSE METABÓLICA',510,220,lt); label('pH baixo + HCO₃ baixo',510,370,lt);
+              label('ALCALOSE METABÓLICA',1410,220,lt); label('pH alto + HCO₃ alto',1410,370,lt);
+              label('Cetoacidose • acidose lática • diarreia',510,650,lt);
+              label('Vómitos • diuréticos • excesso de base',1410,650,lt);
+            }
+            function collection(t,lt,dur){
+              bg('#edf4f8'); panel(100,100,1720,800,'#ffffff');
+              ellipse(500,500,155,110,{fill:'#e8b08b',stroke:'#263247',lwPx:7});
+              line([[380,500],[620,500]],{stroke:'#b51f35',lwPx:24});
+              line([[600,390],[820,260]],{stroke:'#64748b',lwPx:18});
+              ellipse(820,260,24,24,{fill:'#e63946',stroke:'#7b1e2b',lwPx:4});
+              label('Artéria radial • punho',520,700,lt);
+              label('Seringa própria pré-heparinizada',1260,360,lt);
+              label('Após a punção: comprimir pelo menos 5 minutos',1260,650,lt);
+            }
+            function quiz(t,lt,dur){
+              bg('#10243a'); panel(160,100,1600,820,'#f5f7fb');
+              label('REVISÃO RÁPIDA',960,230,lt);
+              label('pH baixo + PaCO₂ alto = ?',960,410,lt);
+              label('Resposta: acidose respiratória',960,570,lt);
+              label('pH baixo + HCO₃ baixo = ?',960,730,lt);
+              label('Resposta: acidose metabólica',960,870,lt);
+            }
+            function closing(t,lt,dur){
+              titleCard('LEMBRE-SE','A gasometria avalia pH, ventilação e oxigenação.');
+              label('Interprete os números junto com o quadro clínico.',950,950,lt);
+            }
+
+            const duration = __DURATION__;
+            const baseStarts = [0,20,45,78,103,137,168,190,203];
+            const baseEnd = 208;
+            const starts = baseStarts.map(s => s / baseEnd * duration);
+            scene({
+              duration,
+              fps: 15,
+              bpm: 92,
+              shots: [
+                [starts[0],opening],
+                [starts[1],purpose],
+                [starts[2],parameters],
+                [starts[3],acidBase],
+                [starts[4],respiratory],
+                [starts[5],metabolic],
+                [starts[6],collection],
+                [starts[7],quiz],
+                [starts[8],closing]
+              ]
+            });
+          })();
+          JS
+
+          sed -i "s/__DURATION__/${DURATION}/" scenes/gasometria/aula_gasometria/scene.js
+
+          # O motor aceita --fps e --workers como opções de render.mjs.
+          # Quatro workers são um teste; se houver pressão de memória, reduzir para 2.
+          scripts/build_scene.sh aula_gasometria --fps=15 --workers=4
+
+          test -s out/aula_gasometria/aula_gasometria.mp4
+          cp out/aula_gasometria/aula_gasometria.mp4 "$RUNNER_TEMP/gasometria/raw/aula-visual-sem-audio.mp4"
+
+      - name: Juntar narração, comprimir e validar o MP4
+        shell: bash
+        env:
+          QUALITY: ${{ inputs.quality }}
+          VOICE: ${{ inputs.voice }}
+          AUDIO_SECONDS: ${{ steps.narration.outputs.audio_seconds }}
+        run: |
+          set -Eeuo pipefail
+          case "$QUALITY" in
+            leve) CRF=29; PRESET=fast; SCALE=640 ;;
+            equilibrada) CRF=26; PRESET=fast; SCALE=720 ;;
+            alta) CRF=23; PRESET=medium; SCALE=1080 ;;
+            *) echo "Qualidade inválida"; exit 2 ;;
+          esac
+
+          ffmpeg -y \
+            -i "$RUNNER_TEMP/gasometria/raw/aula-visual-sem-audio.mp4" \
+            -i "$RUNNER_TEMP/gasometria/audio/narracao.mp3" \
+            -map 0:v:0 -map 1:a:0 \
+            -vf "scale=-2:${SCALE},format=yuv420p" \
+            -c:v libx264 -preset "$PRESET" -crf "$CRF" \
+            -c:a aac -b:a 96k -ar 44100 \
+            -t "$AUDIO_SECONDS" -movflags +faststart \
+            "$RUNNER_TEMP/gasometria/final/gasometria-aula-portugues.mp4"
+
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RUNNER_TEMP/gasometria/final/gasometria-aula-portugues.mp4")
+          SIZE=$(stat -c "%s" "$RUNNER_TEMP/gasometria/final/gasometria-aula-portugues.mp4")
+
+          python - "$DURATION" <<'PY'
+          import sys
+          if float(sys.argv[1]) < 120:
+              raise SystemExit(f"ERRO: vídeo com menos de 2 minutos ({sys.argv[1]}s)")
+          print(f"Vídeo validado: {float(sys.argv[1]):.1f} segundos")
+          PY
+
+          ffprobe -v error \
+            -show_entries stream=codec_type,codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of json \
+            "$RUNNER_TEMP/gasometria/final/gasometria-aula-portugues.mp4" \
+            > "$RUNNER_TEMP/gasometria/final/relatorio-tecnico.json"
+
+          {
+            echo "# Aula de Gasometria Arterial"
+            echo
+            echo "- Duração final: ${DURATION} segundos"
+            echo "- Tamanho final: $((SIZE / 1024 / 1024)) MB"
+            echo "- Voz neural: ${VOICE}"
+            echo "- Perfil de compressão: ${QUALITY} (CRF ${CRF}, ${SCALE}p)"
+            echo "- Renderização: 15 FPS, 4 workers solicitados"
+            echo "- Fallback robótico: desativado"
+          } > "$RUNNER_TEMP/gasometria/final/LEIA-ME.txt"
+
+          cp "$RUNNER_TEMP/gasometria/narracao.txt" "$RUNNER_TEMP/gasometria/final/roteiro-narracao.txt"
+          cp "$RUNNER_TEMP/gasometria/audio/narracao.mp3" "$RUNNER_TEMP/gasometria/final/narracao.mp3"
+
+      - name: Publicar vídeo e relatório
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aula-gasometria-portugues-otimizada
+          path: |
+            ${{ runner.temp }}/gasometria/final/
+            ${{ runner.temp }}/gasometria/audio/narracao.mp3
+            ${{ runner.temp }}/gasometria/narracao.txt
+          if-no-files-found: warn
+          retention-days: 7
