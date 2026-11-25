@@ -1,0 +1,192 @@
+name: Compare code-based video engines
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_note:
+        description: 'Comparison run: the repositories render their own demo scenes; see the workflow summary.'
+        required: false
+        default: 'demo'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-engine-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Render three independent MP4 samples
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prepare output folders
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          mkdir -p "$RUNNER_TEMP/video-tests" "$RUNNER_TEMP/video-tests/animestudio" "$RUNNER_TEMP/video-tests/motion-canvas" "$RUNNER_TEMP/video-tests/2d-animation-studio"
+
+      # TEST 1 — animeStudio: renders its own code-authored feature-promo scene.
+      - name: Clone and render animeStudio
+        id: anime
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/denerFernandes/animeStudio.git animeStudio
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends imagemagick librsvg2-bin
+          corepack enable
+          cd animeStudio
+          pnpm install --frozen-lockfile
+          pnpm promo
+          find . -type f -name '*.mp4' -not -path './node_modules/*' -print -exec cp {} "$RUNNER_TEMP/video-tests/animestudio/animestudio-demo.mp4" \;
+          test -s "$RUNNER_TEMP/video-tests/animestudio/animestudio-demo.mp4"
+
+      # TEST 2 — Motion Canvas: writes a small original scene in TypeScript,
+      # starts the official editor/server and asks its documented FFmpeg exporter
+      # to render through the editor UI (Motion Canvas does not document a headless CLI).
+      - name: Clone and render Motion Canvas sample
+        id: motion
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/motion-canvas/motion-canvas.git motion-canvas
+          cd motion-canvas
+          npm install
+          cat > packages/template/src/scenes/example.tsx <<'TS'
+          import {Circle, Line, makeScene2D, Rect, Txt} from '@motion-canvas/2d';
+          import {all, createRef, easeInOutCubic, waitFor} from '@motion-canvas/core';
+
+          export default makeScene2D(function* (view) {
+            const sun = createRef<Circle>();
+            const ground = createRef<Line>();
+            const seed = createRef<Circle>();
+            const tree = createRef<Rect>();
+            const title = createRef<Txt>();
+            view.fill('#101827');
+            view.add(<Line ref={ground} points={[[-850, 260], [850, 260]]} lineWidth={8} stroke={'#6fbd78'} />);
+            view.add(<Circle ref={sun} x={620} y={-300} size={130} fill={'#ffd166'} />);
+            view.add(<Circle ref={seed} x={-480} y={220} size={26} fill={'#b77942'} />);
+            view.add(<Rect ref={tree} x={0} y={160} width={34} height={10} fill={'#8b5a2b'} radius={8} />);
+            view.add(<Txt ref={title} text={'A SEMENTE E A ÁRVORE'} y={-390} fontSize={54} fill={'#ffffff'} />);
+            yield* waitFor(0.5);
+            yield* all(sun().position.y(-210, 1.5, easeInOutCubic), seed().position.x(-120, 1.5));
+            yield* all(seed().size(8, 0.4), tree().size([34, 220], 1.2, easeInOutCubic), tree().position.y(140, 1.2));
+            yield* all(tree().size([34, 220], 0.4), sun().fill('#ffe08a', 0.4));
+            view.add(<Circle x={0} y={-10} size={190} fill={'#2f9e62'} />);
+            view.add(<Circle x={-75} y={-65} size={125} fill={'#36b36b'} />);
+            view.add(<Circle x={75} y={-70} size={130} fill={'#36b36b'} />);
+            yield* waitFor(1.5);
+          });
+          TS
+          # The official template includes the FFmpeg exporter in its Vite config.
+          (npm run template:dev -- --host 127.0.0.1 > "$RUNNER_TEMP/motion-canvas-vite.log" 2>&1 & echo $! > "$RUNNER_TEMP/motion-canvas.pid")
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9000/ >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:9000/ >/dev/null
+          mkdir -p "$RUNNER_TEMP/browser-tools"
+          npm install --prefix "$RUNNER_TEMP/browser-tools" playwright
+          "$RUNNER_TEMP/browser-tools/node_modules/.bin/playwright" install chromium --with-deps
+          cat > "$RUNNER_TEMP/render-motion-canvas.cjs" <<'JS'
+          const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
+          const fs = require('fs');
+          const path = require('path');
+          (async () => {
+            const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+            const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+            page.setDefaultTimeout(120000);
+            await page.goto('http://127.0.0.1:9000/', {waitUntil: 'domcontentloaded'});
+            await page.waitForTimeout(15000);
+            const candidates = page.getByRole('button', {name: /render/i});
+            if (await candidates.count()) await candidates.first().click();
+            else await page.getByText(/^RENDER$/i).first().click();
+            const out = path.join(process.env.MC_OUT, 'packages/template/output');
+            const deadline = Date.now() + 25 * 60 * 1000;
+            let found;
+            while (Date.now() < deadline) {
+              if (fs.existsSync(out)) {
+                const files = fs.readdirSync(out, {recursive: true}).filter(x => String(x).toLowerCase().endsWith('.mp4'));
+                if (files.length) { found = path.join(out, String(files[0])); break; }
+              }
+              await page.waitForTimeout(5000);
+            }
+            if (!found) throw new Error('Motion Canvas did not produce an MP4 within 25 minutes. Check the editor/exporter UI and log.');
+            fs.copyFileSync(found, process.env.MC_DEST);
+            await browser.close();
+          })().catch(e => { console.error(e); process.exit(1); });
+          JS
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-tools/node_modules/playwright" \
+          MC_OUT="$RUNNER_TEMP/motion-canvas" \
+          MC_DEST="$RUNNER_TEMP/video-tests/motion-canvas/motion-canvas-demo.mp4" \
+          node "$RUNNER_TEMP/render-motion-canvas.cjs"
+          test -s "$RUNNER_TEMP/video-tests/motion-canvas/motion-canvas-demo.mp4"
+
+      # TEST 3 — Safadi 2D Animation Studio: its renderer paints code-authored
+      # frames with Chromium and encodes a 1080p H.264 MP4 using FFmpeg.
+      - name: Clone and render 2D Animation Studio
+        id: studio
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/hanisaf/2d-animation-studio.git 2d-animation-studio
+          cd 2d-animation-studio
+          npm install
+          npx playwright install chromium --with-deps
+          export CHROME_BIN="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name chromium \) | head -n 1)"
+          export PUPPETEER_EXECUTABLE_PATH="$CHROME_BIN"
+          scripts/build_scene.sh scene01_juggling
+          find out -type f -name '*.mp4' -print -exec cp {} "$RUNNER_TEMP/video-tests/2d-animation-studio/2d-animation-studio-demo.mp4" \;
+          test -s "$RUNNER_TEMP/video-tests/2d-animation-studio/2d-animation-studio-demo.mp4"
+
+      - name: Write comparison report
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '# Code-based video engine comparison'
+            echo
+            echo '| Engine | Result | Duration / resolution / size |'
+            echo '|---|---|---|'
+            for entry in 'animeStudio:animestudio/animestudio-demo.mp4' 'Motion Canvas:motion-canvas/motion-canvas-demo.mp4' '2D Animation Studio:2d-animation-studio/2d-animation-studio-demo.mp4'; do
+              name="${entry%%:*}"; file="${entry#*:}"
+              if test -s "$RUNNER_TEMP/video-tests/$file"; then
+                bytes=$(stat -c '%s' "$RUNNER_TEMP/video-tests/$file")
+                duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RUNNER_TEMP/video-tests/$file" 2>/dev/null || echo 'unknown')
+                dimensions=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of csv=s=x:p=0 "$RUNNER_TEMP/video-tests/$file" 2>/dev/null || echo 'unknown')
+                echo "| $name | MP4 generated | ${duration}s; ${dimensions}; $((bytes / 1024)) KiB |"
+              else
+                echo "| $name | Failed / no MP4 produced | See job logs |"
+              fi
+            done
+            echo
+            echo 'These are repository demo scenes, not matched scenes: animeStudio renders its feature promo, Motion Canvas renders the workflow-authored seed/tree animation, and 2D Animation Studio renders its bundled juggling scene. Compare visual quality and duration, but do not treat this as a controlled benchmark.'
+          } > "$GITHUB_WORKSPACE/comparison-report.md"
+          cp -R "$RUNNER_TEMP/video-tests/." "$GITHUB_WORKSPACE/" 2>/dev/null || true
+
+      - name: Upload MP4s and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-video-engine-comparison
+          path: |
+            ${{ github.workspace }}/animestudio/
+            ${{ github.workspace }}/motion-canvas/
+            ${{ github.workspace }}/2d-animation-studio/
+            ${{ github.workspace }}/comparison-report.md
+          if-no-files-found: warn
+          retention-days: 7
