@@ -1,0 +1,291 @@
+name: Teste - Tres geradores de video (Gasometria)
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Ficheiro Markdown com o texto de Gasometria"
+        required: true
+        default: "gasometria.md"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tres-geradores-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  projeto_1:
+    name: "Projeto 1 - Automated Video Generator"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Obter o texto de entrada
+        uses: actions/checkout@v7
+
+      - name: Validar texto
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "${{ inputs.input_file }}" || {
+            echo "::error::Falta o ficheiro ${{ inputs.input_file }}. Adiciona o texto de Gasometria ao repositorio."
+            exit 1
+          }
+
+      - name: Instalar ferramentas
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Clonar e instalar o projeto
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git clone --depth 1 https://github.com/paulopatayon-collab/automated-video-generator.git /tmp/project1
+          cd /tmp/project1
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Adaptar a entrada para cenas em português
+        shell: bash
+        env:
+          INPUT_FILE: ${{ inputs.input_file }}
+        run: |
+          set -Eeuo pipefail
+          cp "${INPUT_FILE}" /tmp/gasometria_input.md
+          cat > /tmp/project1/src/script_generator.py <<'PY'
+          from __future__ import annotations
+          import re
+          from dataclasses import dataclass
+          from pathlib import Path
+
+          @dataclass(frozen=True)
+          class Scene:
+              title: str
+              narration: str
+              visual: str
+              accent: str
+
+          def build_video_plan(topic: str) -> list[Scene]:
+              raw = Path("/tmp/gasometria_input.md").read_text(encoding="utf-8")
+              raw = re.sub(r"```.*?```", " ", raw, flags=re.S)
+              raw = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", raw)
+              raw = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", raw)
+              chunks = [re.sub(r"\s+", " ", x).strip(" #-\t") for x in re.split(r"(?<=[.!?])\s+|\n{2,}", raw)]
+              chunks = [x for x in chunks if len(x.split()) >= 7]
+              if not chunks:
+                  raise RuntimeError("O texto de entrada não contém parágrafos suficientes.")
+              groups = []
+              current = []
+              count = 0
+              for sentence in chunks:
+                  words = len(sentence.split())
+                  if current and count + words > 65:
+                      groups.append(" ".join(current)); current=[]; count=0
+                  current.append(sentence); count += words
+              if current:
+                  groups.append(" ".join(current))
+              palette = ["#63E6BE", "#74C0FC", "#FFD43B", "#B197FC", "#FFA94D", "#69DB7C"]
+              return [
+                  Scene(f"Gasometria | Parte {i+1}", text, ["hook","client","request","server","database","response"][i%6], palette[i%6])
+                  for i, text in enumerate(groups)
+              ]
+
+          def output_slug(topic: str) -> str:
+              return "gasometria"
+          PY
+          sed -i 's/VOICE = "en-US-GuyNeural"/VOICE = "pt-PT-RaquelNeural"/' /tmp/project1/src/tts.py
+
+      - name: Gerar vídeo e validar duração
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/project1
+          python generate.py "Gasometria"
+          mkdir -p "$GITHUB_WORKSPACE/results/projeto-1"
+          find output -type f -name '*.mp4' -exec cp {} "$GITHUB_WORKSPACE/results/projeto-1/video.mp4" \;
+          test -s "$GITHUB_WORKSPACE/results/projeto-1/video.mp4"
+          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$GITHUB_WORKSPACE/results/projeto-1/video.mp4")
+          echo "Duração Projeto 1: ${DURATION}s"
+          awk -v d="$DURATION" 'BEGIN { if (d < 180) exit 1 }' || {
+            echo "::error::Projeto 1 gerou menos de 180 segundos."
+            exit 1
+          }
+
+      - name: Guardar vídeo e logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: projeto-1-gasometria
+          path: |
+            results/projeto-1/
+            /tmp/project1/output/
+          if-no-files-found: warn
+          retention-days: 5
+
+  projeto_2:
+    name: "Projeto 2 - NovelMotion"
+    needs: projeto_1
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Obter o texto de entrada
+        uses: actions/checkout@v7
+
+      - name: Validar texto
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "${{ inputs.input_file }}" || {
+            echo "::error::Falta o ficheiro ${{ inputs.input_file }}."
+            exit 1
+          }
+
+      - name: Instalar Python e FFmpeg
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências do NovelMotion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          git clone --depth 1 https://github.com/Bailuer/NovelMotion.git /tmp/novelmotion
+          cd /tmp/novelmotion
+          pip install -r requirements.txt
+          pip install edge-tts
+
+      - name: Criar storyboard, frames, legendas e vídeo
+        shell: bash
+        env:
+          INPUT_FILE: ${{ inputs.input_file }}
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/novelmotion
+          python main.py \
+            --input "$GITHUB_WORKSPACE/${INPUT_FILE}" \
+            --outdir "$GITHUB_WORKSPACE/results/projeto-2" \
+            --title "Gasometria: da fisiologia à interpretação" \
+            --seconds-per-sentence 5 \
+            --orientation portrait \
+            --renderer placeholder \
+            --auto-render
+
+      - name: Gerar narração em português e sincronizar com o vídeo
+        shell: bash
+        env:
+          INPUT_FILE: ${{ inputs.input_file }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p results/projeto-2
+          edge-tts --voice pt-PT-RaquelNeural --rate="+0%" --file "$INPUT_FILE" --write-media results/projeto-2/narracao.mp3
+          SILENT_VIDEO="results/projeto-2/novelmotion_portrait.mp4"
+          test -s "$SILENT_VIDEO"
+          AUDIO_SECONDS=$(ffprobe -v error -show_entries format=duration -of csv=p=0 results/projeto-2/narracao.mp3)
+          # Repete a sequência visual até terminar a narração; não corta o áudio.
+          ffmpeg -y -stream_loop -1 -i "$SILENT_VIDEO" -i results/projeto-2/narracao.mp3 \
+            -map 0:v:0 -map 1:a:0 -t "$AUDIO_SECONDS" \
+            -c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p \
+            -c:a aac -b:a 128k -shortest results/projeto-2/video-narrado.mp4
+
+      - name: Validar vídeo
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO="results/projeto-2/video-narrado.mp4"
+          test -s "$VIDEO" || {
+            echo "::error::NovelMotion não criou o MP4 narrado."
+            exit 1
+          }
+          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
+          AUDIO_STREAM=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$VIDEO")
+          echo "Duração Projeto 2: ${DURATION}s"
+          test "$AUDIO_STREAM" = "audio"
+          awk -v d="$DURATION" 'BEGIN { if (d < 180) exit 1 }' || {
+            echo "::error::Projeto 2 gerou menos de 180 segundos."
+            exit 1
+          }
+
+      - name: Guardar vídeo, storyboard e logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: projeto-2-gasometria
+          path: |
+            results/projeto-2/
+            /tmp/novelmotion/
+          if-no-files-found: warn
+          retention-days: 5
+
+  projeto_3:
+    name: "Projeto 3 - md2video"
+    needs: projeto_2
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Obter o texto de entrada
+        uses: actions/checkout@v7
+
+      - name: Validar texto
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "${{ inputs.input_file }}" || {
+            echo "::error::Falta o ficheiro ${{ inputs.input_file }}."
+            exit 1
+          }
+
+      - name: Instalar Python, Node e FFmpeg
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências do md2video
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+          git clone --depth 1 https://github.com/SashaSaw/md2video.git /tmp/md2video
+          cd /tmp/md2video
+          python -m pip install --upgrade pip
+          pip install -e .
+          playwright install --with-deps chromium
+
+      - name: Executar verificação de entrada e renderização
+        shell: bash
+        env:
+          INPUT_FILE: ${{ inputs.input_file }}
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/md2video
+          mkdir -p "$GITHUB_WORKSPACE/results/projeto-3"
+          cp "$GITHUB_WORKSPACE/${INPUT_FILE}" "$GITHUB_WORKSPACE/results/projeto-3/gasometria.md"
+          # Primeiro valida o parsing. O projeto tem dependências de voz específicas
+          # (Kokoro/macOS say); sem uma configuração de TTS Linux compatível,
+          # não se declara sucesso nem se cria um vídeo fictício.
+          md2video "$GITHUB_WORKSPACE/${INPUT_FILE}" --dry-run
+          echo "DRY_RUN_OK" > "$GITHUB_WORKSPACE/results/projeto-3/status.txt"
+          echo "::warning::md2video foi validado em dry-run. A renderização completa requer configurar um backend TTS compatível com Linux e português."
+
+      - name: Guardar resultado e logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: projeto-3-gasometria-diagnostico
+          path: |
+            results/projeto-3/
+            /tmp/md2video/
+          if-no-files-found: warn
+          retention-days: 5
