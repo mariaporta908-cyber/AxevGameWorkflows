@@ -1,0 +1,80 @@
+name: Teste - Gerador de Vídeo Vertical
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Tema do vídeo"
+        required: true
+        type: string
+        default: "How APIs Work in 60 Seconds"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-generator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate-video:
+    name: Instalar, gerar e validar vídeo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout do teu repositório
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Obter o gerador
+        run: |
+          git clone --depth 1 https://github.com/paulopatayon-collab/automated-video-generator.git video-generator
+          test -f video-generator/generate.py
+          test -f video-generator/requirements.txt
+
+      - name: Instalar dependências do gerador
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r video-generator/requirements.txt
+
+      - name: Gerar vídeo
+        env:
+          VIDEO_TOPIC: ${{ inputs.topic }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          cd video-generator
+          python generate.py "$VIDEO_TOPIC" --keep-temp
+          find output -type f -maxdepth 5 -print || true
+          VIDEO_FILE="$(find output -type f -iname '*.mp4' -size +10k | head -n 1)"
+          if [ -z "$VIDEO_FILE" ]; then
+            echo "::error::O gerador terminou sem produzir um MP4 válido."
+            exit 1
+          fi
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO_FILE"
+          cp "$VIDEO_FILE" ../artifacts/video-final.mp4
+          cp -R output ../artifacts/output-original
+
+      - name: Guardar vídeo e ficheiros de diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-generator-${{ github.run_number }}
+          path: |
+            artifacts/
+            video-generator/output/
+            video-generator/temp/
+          if-no-files-found: warn
+          retention-days: 5
