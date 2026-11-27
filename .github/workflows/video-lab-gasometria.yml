@@ -1,0 +1,171 @@
+name: Video Lab - Gasometria Arterial
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  video-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Preparar conteúdo comum
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+          mkdir -p "$RUNNER_TEMP/lab"/{input,outputs,logs,work}
+          cat > "$RUNNER_TEMP/lab/story.txt" <<'EOF'
+          GASOMETRIA ARTERIAL
+          A gasometria arterial é um exame laboratorial que ajuda a avaliar a ventilação,
+          a oxigenação e o equilíbrio ácido-base.
+          O pH indica a componente acidobásica. A PaCO2 relaciona-se com a ventilação
+          alveolar. A PaO2 ajuda a avaliar a oxigenação. O bicarbonato representa
+          a componente metabólica do equilíbrio ácido-base.
+          A qualidade do resultado depende também das fases pré-analítica, analítica
+          e pós-analítica: identificação e colheita corretas, análise adequada e
+          validação e comunicação responsáveis dos resultados.
+          Este vídeo é educativo e não substitui formação ou avaliação clínica.
+          EOF
+          espeak-ng -v pt -s 142 -f "$RUNNER_TEMP/lab/story.txt" \
+            -w "$RUNNER_TEMP/lab/input/narration.wav"
+          ffmpeg -y -f lavfi -i "color=c=0x10243a:s=1280x720:r=25:d=90" \
+            -i "$RUNNER_TEMP/lab/input/narration.wav" \
+            -vf "drawtext=text='GASOMETRIA ARTERIAL':fontcolor=white:fontsize=54:x=(w-text_w)/2:y=150:enable='between(t,0,12)',drawtext=text='pH  |  PaCO2  |  PaO2  |  HCO3-':fontcolor=0x79d7ff:fontsize=38:x=(w-text_w)/2:y=270:enable='between(t,12,30)',drawtext=text='FASES LABORATORIAIS':fontcolor=white:fontsize=46:x=(w-text_w)/2:y=170:enable='between(t,30,90)',drawtext=text='Pre-analitica  |  Analitica  |  Pos-analitica':fontcolor=0x79d7ff:fontsize=30:x=(w-text_w)/2:y=270:enable='between(t,30,90)'" \
+            -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac \
+            "$RUNNER_TEMP/lab/input/gasometria-base.mp4"
+          ffprobe -v error -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            "$RUNNER_TEMP/lab/input/gasometria-base.mp4" \
+            > "$RUNNER_TEMP/lab/input/duration.txt"
+
+      - name: 1 - givemotion (render de composição HTML)
+        id: givemotion
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          D="$RUNNER_TEMP/lab/work/givemotion"
+          mkdir -p "$D"
+          cd "$D"
+          npx --yes givemotion init project
+          cd project
+          cat > gasometria.html <<'HTML'
+          <!doctype html>
+          <html><head><meta charset="utf-8"><style>
+          *{box-sizing:border-box}body{margin:0;background:#10243a;color:white;font-family:Arial,sans-serif}
+          section{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:8vw}
+          h1{font-size:7vw;color:#79d7ff}p{font-size:3vw;line-height:1.5}.tag{color:#9be7c4}
+          </style></head><body><section><h1>GASOMETRIA ARTERIAL</h1>
+          <p>Ventilação · Oxigenação · Equilíbrio ácido-base</p>
+          <p class="tag">pH | PaCO₂ | PaO₂ | HCO₃⁻</p>
+          <p>Fases pré-analítica, analítica e pós-analítica</p></section></body></html>
+          HTML
+          npx --yes givemotion render gasometria.html -o "$RUNNER_TEMP/lab/outputs/givemotion.mp4"
+          RC=$?
+          echo "exit_code=$RC" > "$RUNNER_TEMP/lab/logs/givemotion.txt"
+          rm -rf "$D"
+          exit "$RC"
+
+      - name: 2 - HyperFrames (render de composição HTML)
+        id: hyperframes
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          D="$RUNNER_TEMP/lab/work/hyperframes"
+          mkdir -p "$D"
+          cd "$D"
+          npx --yes hyperframes init gasometria --non-interactive --example blank
+          cd gasometria
+          cat > index.html <<'HTML'
+          <!doctype html>
+          <html><head><meta charset="utf-8"><style>
+          *{box-sizing:border-box}body{margin:0;background:#10243a;color:white;font-family:Arial,sans-serif}
+          main{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:8vw}
+          h1{font-size:7vw;color:#79d7ff}p{font-size:3vw;line-height:1.5}.tag{color:#9be7c4}
+          </style></head><body><main><h1>GASOMETRIA ARTERIAL</h1>
+          <p>Ventilação · Oxigenação · Equilíbrio ácido-base</p>
+          <p class="tag">pH | PaCO₂ | PaO₂ | HCO₃⁻</p>
+          <p>Fases pré-analítica, analítica e pós-analítica</p></main></body></html>
+          HTML
+          npx --yes hyperframes render --output "$RUNNER_TEMP/lab/outputs/hyperframes.mp4"
+          RC=$?
+          echo "exit_code=$RC" > "$RUNNER_TEMP/lab/logs/hyperframes.txt"
+          cd /
+          rm -rf "$D"
+          exit "$RC"
+
+      - name: 3 - MakeMyClip (importar e exportar o vídeo-base)
+        id: makemyclip
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          D="$RUNNER_TEMP/lab/work/makemyclip"
+          mkdir -p "$D"
+          export MAKEMYCLIP_WORKSPACE="$D"
+          npx --yes @makemyclip/editor timeline new
+          npx --yes @makemyclip/editor timeline add-media \
+            "$RUNNER_TEMP/lab/input/gasometria-base.mp4"
+          npx --yes @makemyclip/editor timeline export \
+            "$RUNNER_TEMP/lab/outputs/makemyclip.mp4"
+          RC=$?
+          echo "exit_code=$RC" > "$RUNNER_TEMP/lab/logs/makemyclip.txt"
+          rm -rf "$D"
+          exit "$RC"
+
+      - name: 4 - Dawn Cut (testar pipeline de edição local)
+        id: dawncut
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          D="$RUNNER_TEMP/lab/work/dawn-cut"
+          git clone --depth 1 https://github.com/kwakseongjae/dawn-cut.git "$D"
+          cd "$D"
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm demo:assets
+          pnpm demo:run
+          RC=$?
+          echo "exit_code=$RC" > "$RUNNER_TEMP/lab/logs/dawn-cut.txt"
+          cd /
+          rm -rf "$D"
+          exit "$RC"
+
+      - name: Comparação final
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# Relatório de execução - Gasometria arterial"
+            echo
+            echo "## Vídeos encontrados"
+            find "$RUNNER_TEMP/lab/outputs" -maxdepth 1 -type f \
+              -name '*.mp4' -printf '%f — %s bytes\n' 2>/dev/null || true
+            echo
+            echo "## Resultado de cada projeto"
+            for f in "$RUNNER_TEMP/lab/logs"/*.txt; do
+              [ -f "$f" ] && echo "- $(basename "$f"): $(cat "$f")"
+            done
+            echo
+            echo "## Limites da comparação"
+            echo "- givemotion e HyperFrames renderizam composições HTML criadas para este teste."
+            echo "- MakeMyClip importa e exporta o mesmo vídeo-base, testando o fluxo de edição."
+            echo "- Dawn Cut executa o demo oficial do repositório; o README não documenta um comando CLI estável para renderizar diretamente este vídeo-base."
+            echo "- Os vídeos não são equivalentes em recursos: o relatório regista o que cada ferramenta realmente conseguiu executar."
+          } > "$RUNNER_TEMP/lab/COMPARACAO.md"
+          cat "$RUNNER_TEMP/lab/COMPARACAO.md"
+
+      - name: Guardar vídeos, logs e comparação
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gasometria-video-lab
+          path: ${{ runner.temp }}/lab/
+          if-no-files-found: warn
+          retention-days: 7
