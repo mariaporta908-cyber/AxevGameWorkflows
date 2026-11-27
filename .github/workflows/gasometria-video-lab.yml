@@ -1,0 +1,238 @@
+name: Gasometria - Open Source Video Lab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  video-lab:
+    name: Sequential repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Prepare Linux tools and shared test story
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git jq ffmpeg
+          mkdir -p "$RUNNER_TEMP/gasometria-results"
+
+          cat > "$RUNNER_TEMP/gasometria-story.txt" <<'EOF'
+          GASOMETRIA ARTERIAL — roteiro de teste
+
+          Cena 1 — Introdução
+          A gasometria arterial avalia o equilíbrio acidobásico,
+          a ventilação e a oxigenação.
+
+          Cena 2 — Fisiologia
+          Nos alvéolos pulmonares ocorre a troca gasosa:
+          o oxigénio passa para o sangue e o dióxido de carbono é eliminado.
+
+          Cena 3 — Amostra
+          A amostra arterial deve ser colhida e transportada
+          de acordo com o procedimento laboratorial.
+
+          Cena 4 — Análise
+          O analisador mede parâmetros como pH, PaCO2 e PaO2.
+
+          Cena 5 — Interpretação
+          O pH, a PaCO2 e o bicarbonato ajudam a avaliar
+          o estado acidobásico, sempre em contexto clínico.
+
+          Cena 6 — Conclusão
+          A qualidade do resultado depende também das fases
+          pré-analítica, analítica e pós-analítica.
+          EOF
+
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "color=c=0x10243a:s=1280x720:r=25:d=30" \
+            -f lavfi -i "anullsrc=r=44100:cl=stereo" \
+            -t 30 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -shortest \
+            "$RUNNER_TEMP/gasometria-reference.mp4"
+
+      # These four steps intentionally inspect each repository first.
+      # Their actual render/edit commands must be selected from each repo's
+      # current README/package scripts; guessed CLI commands are avoided.
+      - name: Test 1 - givemotion
+        id: givemotion
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          DIR="$RUNNER_TEMP/test-givemotion"
+          OUT="$RUNNER_TEMP/gasometria-results"
+          START=$(date +%s)
+          mkdir -p "$DIR"
+          git clone --depth 1 https://github.com/givemotion/givemotion.git "$DIR/repo"
+          RC=$?
+          {
+            echo "clone_exit=$RC"
+            if [ "$RC" -eq 0 ]; then
+              echo "## Files"
+              find "$DIR/repo" -maxdepth 2 -type f | sort | head -100
+              echo "## package.json"
+              if [ -f "$DIR/repo/package.json" ]; then
+                jq '{name, packageManager, scripts, dependencies, devDependencies}' "$DIR/repo/package.json"
+              fi
+              echo "## README"
+              for f in "$DIR/repo/README.md" "$DIR/repo/readme.md"; do
+                if [ -f "$f" ]; then sed -n '1,220p' "$f"; break; fi
+              done
+            fi
+          } > "$OUT/givemotion-inspection.txt" 2>&1
+          END=$(date +%s)
+          printf 'clone_exit=%s\nduration_seconds=%s\n' "$RC" "$((END-START))" > "$OUT/givemotion-status.txt"
+          rm -rf "$DIR"
+          exit 0
+
+      - name: Test 2 - HyperFrames
+        id: hyperframes
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          DIR="$RUNNER_TEMP/test-hyperframes"
+          OUT="$RUNNER_TEMP/gasometria-results"
+          START=$(date +%s)
+          mkdir -p "$DIR"
+          git clone --depth 1 https://github.com/heygen-com/hyperframes.git "$DIR/repo"
+          RC=$?
+          {
+            echo "clone_exit=$RC"
+            if [ "$RC" -eq 0 ]; then
+              echo "## Files"
+              find "$DIR/repo" -maxdepth 2 -type f | sort | head -100
+              echo "## package.json"
+              if [ -f "$DIR/repo/package.json" ]; then
+                jq '{name, packageManager, scripts, dependencies, devDependencies}' "$DIR/repo/package.json"
+              fi
+              echo "## README"
+              for f in "$DIR/repo/README.md" "$DIR/repo/readme.md"; do
+                if [ -f "$f" ]; then sed -n '1,220p' "$f"; break; fi
+              done
+            fi
+          } > "$OUT/hyperframes-inspection.txt" 2>&1
+          END=$(date +%s)
+          printf 'clone_exit=%s\nduration_seconds=%s\n' "$RC" "$((END-START))" > "$OUT/hyperframes-status.txt"
+          rm -rf "$DIR"
+          exit 0
+
+      - name: Test 3 - MakeMyClip
+        id: makemyclip
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          DIR="$RUNNER_TEMP/test-makemyclip"
+          OUT="$RUNNER_TEMP/gasometria-results"
+          START=$(date +%s)
+          mkdir -p "$DIR"
+          git clone --depth 1 https://github.com/MakeMyClip/editor.git "$DIR/repo"
+          RC=$?
+          {
+            echo "clone_exit=$RC"
+            if [ "$RC" -eq 0 ]; then
+              echo "## Files"
+              find "$DIR/repo" -maxdepth 2 -type f | sort | head -100
+              echo "## package.json"
+              if [ -f "$DIR/repo/package.json" ]; then
+                jq '{name, packageManager, scripts, dependencies, devDependencies}' "$DIR/repo/package.json"
+              fi
+              echo "## README"
+              for f in "$DIR/repo/README.md" "$DIR/repo/readme.md"; do
+                if [ -f "$f" ]; then sed -n '1,220p' "$f"; break; fi
+              done
+            fi
+          } > "$OUT/makemyclip-inspection.txt" 2>&1
+          END=$(date +%s)
+          printf 'clone_exit=%s\nduration_seconds=%s\n' "$RC" "$((END-START))" > "$OUT/makemyclip-status.txt"
+          rm -rf "$DIR"
+          exit 0
+
+      - name: Test 4 - Dawn Cut
+        id: dawncut
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          DIR="$RUNNER_TEMP/test-dawn-cut"
+          OUT="$RUNNER_TEMP/gasometria-results"
+          START=$(date +%s)
+          mkdir -p "$DIR"
+          git clone --depth 1 https://github.com/kwakseongjae/dawn-cut.git "$DIR/repo"
+          RC=$?
+          {
+            echo "clone_exit=$RC"
+            if [ "$RC" -eq 0 ]; then
+              echo "## Files"
+              find "$DIR/repo" -maxdepth 2 -type f | sort | head -100
+              echo "## package.json"
+              if [ -f "$DIR/repo/package.json" ]; then
+                jq '{name, packageManager, scripts, dependencies, devDependencies}' "$DIR/repo/package.json"
+              fi
+              echo "## README"
+              for f in "$DIR/repo/README.md" "$DIR/repo/readme.md"; do
+                if [ -f "$f" ]; then sed -n '1,220p' "$f"; break; fi
+              done
+            fi
+          } > "$OUT/dawn-cut-inspection.txt" 2>&1
+          END=$(date +%s)
+          printf 'clone_exit=%s\nduration_seconds=%s\n' "$RC" "$((END-START))" > "$OUT/dawn-cut-status.txt"
+          rm -rf "$DIR"
+          exit 0
+
+      - name: Create final report
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OUT="$RUNNER_TEMP/gasometria-results"
+          REPORT="$OUT/report.md"
+          {
+            echo "# Gasometria — Open Source Video Lab"
+            echo
+            echo "## Cenário comum"
+            echo "História educativa: introdução, fisiologia, amostra, análise, interpretação e conclusão."
+            echo
+            echo "## Resumo"
+            for f in "$OUT"/*-status.txt; do
+              [ -f "$f" ] || continue
+              echo
+              echo "### $(basename "$f" .txt)"
+              echo '```text'
+              cat "$f"
+              echo '```'
+            done
+            echo
+            echo "## Inspeção dos repositórios"
+            for f in "$OUT"/*-inspection.txt; do
+              [ -f "$f" ] || continue
+              echo
+              echo "### $(basename "$f" .txt)"
+              echo '```text'
+              cat "$f"
+              echo '```'
+            done
+            echo
+            echo "## Ficheiro de referência"
+            ls -lh "$RUNNER_TEMP/gasometria-reference.mp4"
+            echo
+            echo "NOTA: esta primeira versão valida os repositórios e recolhe instruções reais de instalação/execução. Ainda não afirma que os quatro programas renderizaram vídeos."
+          } > "$REPORT"
+
+      - name: Upload report and test inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gasometria-video-lab-results
+          path: |
+            ${{ runner.temp }}/gasometria-results/
+            ${{ runner.temp }}/gasometria-reference.mp4
+            ${{ runner.temp }}/gasometria-story.txt
+          retention-days: 1
+          if-no-files-found: warn
